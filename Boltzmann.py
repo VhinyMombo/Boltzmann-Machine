@@ -1,11 +1,17 @@
 
+def min_max_scl(v):
+  return (v-v.min())/(v.max()-v.min())
+
 class BoltzmannModel(IsingModel):
   def __init__(self,n,p,beta, nb_cycle,prob,input_size, n_hidden_unit, eps = 1e-3):
     super().__init__(n,p,beta,nb_cycle,prob)
     self._input_size = input_size
     self._n_hidden_unit = n_hidden_unit
     self._W = np.random.random([n_hidden_unit,input_size])
-    self._eps = eps 
+    self._eps = eps
+    self._c = np.random.random(n_hidden_unit)
+    self._b = np.random.random(input_size)
+    
 
   def  get_params(self):
     
@@ -36,39 +42,61 @@ class BoltzmannModel(IsingModel):
   def _forward(self,x):
     x = x.flatten()
     h = np.random.random(self._n_hidden_unit)
-    #pX_ij_cond_Nij  = 1/(1+np.exp(-2*self.beta * sum_N_index))
-    bias = np.random.random(self._n_hidden_unit)
-    #print(f'bias : {bias}')
-    #print(f'w*x : {self._W.dot(x)}')
-    #print(self._W)
-    p_h_v = 1/(1+np.exp(-(bias + self._W.dot(x))))
-    #print(p_h_v)
+    p_h_v = 1/(1+np.exp(-(self._c + self._W.dot(x))))
     h = np.array([np.random.binomial(1,p_h_v[i],1)[0] for i in range(len(p_h_v))])
     return h
   
-  def _update_w(self, v,h,v2,h2):
-    W = np.array([list(i*h) for i in v])
-    W2 = np.array([list(i*h2) for i in v2])
-    DW = self._eps * (W-W2).T
-    self._W+=DW
-
   def _backward(self, h):
-    bias =np.random.random(self._input_size)
-    p_v_h = 1/(1+np.exp(-(bias + h.T.dot(self._W))))
+    p_v_h = 1/(1+np.exp(-(self._b + h.T.dot(self._W))))
     v = np.array([np.random.binomial(1,p_v_h[i],1)[0] for i in range(len(p_v_h))])
     return v
 
   def get_w(self):
     return(self._W)
 
+  def _CD_k(self, data, k = 10):
+    h = np.zeros([len(data), self._n_hidden_unit])
+    DW = np.zeros([self._n_hidden_unit, self._input_size])
+    Db = np.zeros(self._input_size)
+    Dc = np.zeros(self._n_hidden_unit)
+    v = np.zeros( [len(data), self._input_size])
+
+    v[0,] = min_max_scl(data[0].flatten())
+    for t in range(len(data)-1):
+      v_scl = min_max_scl(data[t].flatten())
+      h[t,] = self._forward(v_scl)
+      v[t+1,] = self._backward(h[t,])
+    for i in range(self._n_hidden_unit):
+      for j in range(self._input_size):
+          DW[i,j] +=  (1/(1+np.exp(-(self._c + self._W.dot(v[0,])))))[0]*v[0,j] - (1/(1+np.exp(-(self._c + self._W.dot(v[k-1,])))))[0]*v[k-1,j]
+          Db[j]+= v[0,j] - v[k-1,j]
+          Dc[i]+= (1/(1+np.exp(-(self._c + self._W.dot(v[0,])))))[0] - (1/(1+np.exp(-(self._c + self._W.dot(v[k-1,])))))[0]
+    self._W+=DW[0], 
+    print(np.linalg.norm(DW))
+    self._b+=Db
+    self._c+=Dc
+
+  def _update_w(self, v,h,v2,h2):
+    W = np.array([list(i*h) for i in v])
+    W2 = np.array([list(i*h2) for i in v2])
+    DW = self._eps * (W-W2).T
+    self._W+=DW
+
+
   def forward(self,v):
     v = v.flatten()
     v = (v-v.mean())/v.std()
     for cycle in tqdm(range(self.nb_cycle), desc ="epochs"):
       h = self._forward(v)
-      #print(f'h = {h}')
-      print(np.linalg.norm(self._W))
+      #print(np.linalg.norm(self._W))
       v_prime = self._backward(h)
       h_prime = self._forward(v_prime)
       self._update_w(v,h,v_prime,h_prime)
+    return self._W
+  
+  def forward2(self,v):
+    v = min_max_scl(v)
+    for cycle in tqdm(range(self.nb_cycle), desc ="epochs"):
+      wi = self._W
+      self._CD_k(v, k = 10)
     return self._W
